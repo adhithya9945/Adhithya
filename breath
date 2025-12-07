@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Breathing Simulation (1:4:2)</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --text-color: #ffffff;
+            --accent-color: #4CAF50;
+            --circle-color: #81C784;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        /* The Breathing Circle */
+        #breathing-container {
+            position: relative;
+            width: 300px;
+            height: 300px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 2rem;
+        }
+
+        #circle {
+            width: 100px;
+            height: 100px;
+            background-color: var(--circle-color);
+            border-radius: 50%;
+            opacity: 0.8;
+            transform: scale(1);
+            box-shadow: 0 0 20px rgba(129, 199, 132, 0.5);
+            /* Transition is handled by JS for variable timing */
+        }
+
+        #status-text {
+            position: absolute;
+            font-size: 1.5rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        }
+
+        /* Controls UI */
+        .controls {
+            background: #1e1e1e;
+            padding: 20px;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 400px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        .row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            align-items: center;
+        }
+
+        label { font-size: 0.9rem; color: #aaa; }
+        input[type="number"] {
+            background: #333;
+            border: none;
+            color: white;
+            padding: 5px;
+            border-radius: 4px;
+            width: 60px;
+            text-align: center;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        #btn-start { background-color: var(--accent-color); color: white; }
+        #btn-stop { background-color: #ef5350; color: white; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        #stats {
+            margin-top: 20px;
+            font-size: 0.8rem;
+            color: #888;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="breathing-container">
+        <div id="circle"></div>
+        <div id="status-text">Ready</div>
+    </div>
+
+    <div class="controls">
+        <div class="row">
+            <label>Base Sec (1 Unit):</label>
+            <input type="number" id="base-time" value="4" min="1">
+        </div>
+        <div class="row">
+            <label>Ratio (Inhale-Hold-Exhale):</label>
+            <div style="display:flex; gap:5px;">
+                <input type="number" id="ratio-in" value="1" min="1">
+                <input type="number" id="ratio-hold" value="4" min="0">
+                <input type="number" id="ratio-out" value="2" min="1">
+            </div>
+        </div>
+        <div class="row">
+            <label>Total Cycles:</label>
+            <input type="number" id="total-cycles" value="5" min="1">
+        </div>
+        
+        <div class="btn-group">
+            <button id="btn-start" onclick="startSession()">START</button>
+            <button id="btn-stop" onclick="stopSession()" disabled>STOP</button>
+        </div>
+
+        <div id="stats">
+            Today's Sessions: <span id="daily-count">0</span> | Google Sync: <span id="sync-status">Offline</span>
+        </div>
+    </div>
+
+    <script>
+        let isRunning = false;
+        let audioCtx;
+        
+        // --- Audio Engine (Oscillator) ---
+        function playTone(freq = 440, type = 'sine', duration = 0.1) {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + duration);
+        }
+
+        // --- Core Logic ---
+        const circle = document.getElementById('circle');
+        const statusText = document.getElementById('status-text');
+        
+        function wait(ms) {
+            return new Promise(resolve => {
+                if (!isRunning) return; 
+                setTimeout(resolve, ms);
+            });
+        }
+
+        async function startSession() {
+            if (isRunning) return;
+            isRunning = true;
+            toggleButtons(true);
+
+            // Get Settings
+            const baseTime = parseInt(document.getElementById('base-time').value) * 1000;
+            const rIn = parseInt(document.getElementById('ratio-in').value);
+            const rHold = parseInt(document.getElementById('ratio-hold').value);
+            const rOut = parseInt(document.getElementById('ratio-out').value);
+            const cycles = parseInt(document.getElementById('total-cycles').value);
+
+            // Wake up Audio
+            playTone(0, 'sine', 0.01); 
+
+            for (let i = 0; i < cycles; i++) {
+                if (!isRunning) break;
+                statusText.innerText = `Cycle ${i + 1}/${cycles}`;
+                
+                // 1. Inhale
+                await performPhase('INHALE', baseTime * rIn, 2.5, 600); // 2.5 scale, 600Hz tone
+                
+                // 2. Hold
+                if (isRunning && rHold > 0) {
+                    await performPhase('HOLD', baseTime * rHold, 2.5, 400); // Stay at 2.5 scale
+                }
+
+                // 3. Exhale
+                if (isRunning) {
+                    await performPhase('EXHALE', baseTime * rOut, 1.0, 300); // Return to 1.0 scale
+                }
+            }
+
+            // Finish
+            if (isRunning) {
+                statusText.innerText = "Complete";
+                playTone(800, 'sine', 0.5);
+                trackProgress(cycles);
+            } else {
+                statusText.innerText = "Stopped";
+            }
+            
+            resetUI();
+        }
+
+        function performPhase(text, duration, scale, toneFreq) {
+            return new Promise(resolve => {
+                if (!isRunning) { resolve(); return; }
+                
+                statusText.innerText = text;
+                playTone(toneFreq);
+                
+                // CSS Transition logic
+                circle.style.transition = `transform ${duration}ms linear`;
+                circle.style.transform = `scale(${scale})`;
+
+                setTimeout(() => {
+                    resolve();
+                }, duration);
+            });
+        }
+
+        function stopSession() {
+            isRunning = false;
+            resetUI();
+        }
+
+        function resetUI() {
+            isRunning = false;
+            toggleButtons(false);
+            circle.style.transition = 'transform 0.5s ease';
+            circle.style.transform = 'scale(1)';
+        }
+
+        function toggleButtons(active) {
+            document.getElementById('btn-start').disabled = active;
+            document.getElementById('btn-stop').disabled = !active;
+        }
+
+        // --- Data Tracking (Local & "Sync" Placeholder) ---
+        function trackProgress(cyclesCompleted) {
+            const today = new Date().toISOString().split('T')[0];
+            let data = JSON.parse(localStorage.getItem('breathing_stats')) || {};
+            
+            if (!data[today]) data[today] = 0;
+            data[today] += cyclesCompleted;
+            
+            localStorage.setItem('breathing_stats', JSON.stringify(data));
+            updateStatsDisplay();
+            
+            // GOOGLE SYNC PLACEHOLDER
+            // If you implement Firebase, this is where you call:
+            // syncToFirestore(today, data[today]);
+        }
+
+        function updateStatsDisplay() {
+            const today = new Date().toISOString().split('T')[0];
+            const data = JSON.parse(localStorage.getItem('breathing_stats')) || {};
+            document.getElementById('daily-count').innerText = data[today] || 0;
+        }
+
+        // Initialize
+        updateStatsDisplay();
+    </script>
+</body>
+</html>
